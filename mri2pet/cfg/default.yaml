@@ -1,0 +1,24 @@
+### Paths ###
+data_path: D:\Projects\mri2pet\data
+checkpoint_dir: D:\Projects\mri2pet\checkpoints\debug
+res_dir: D:\Projects\mri2pet\results
+
+### Training ###
+resume: false
+epochs: 200
+start_epoch: 0
+batch_size: 8
+optimizer: 'adam'
+scheduler: 'lr'
+lr: 0.0002
+earlystop: true
+save_pariod: 20
+
+### Augmentation ###
+transforms: ['Augmentation', 'RandomCrop']
+
+
+device: cuda
+
+
+
