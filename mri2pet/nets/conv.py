@@ -126,7 +126,7 @@ class ConvTranspose(nn.Module):
 
     default_act = nn.ReLU()  # default activation
 
-    def __init__(self, c1, c2, k=3, s=1, padding=0, padding_mode='reflect', bn=True, act=True):
+    def __init__(self, c1, c2, k=3, s=1, padding=0, padding_mode='reflect', output_padding=1, bn=True, act=True):
         """
         Initialize ConvTranspose layer with given parameters.
 
@@ -141,7 +141,7 @@ class ConvTranspose(nn.Module):
             act (bool | nn.Module): Activation function.
         """
         super().__init__()
-        self.conv_transpose = nn.ConvTranspose2d(c1, c2, k, s, padding=padding, padding_mode=padding_mode, bias=not bn)
+        self.conv_transpose = nn.ConvTranspose2d(c1, c2, k, s, padding=padding, padding_mode=padding_mode, output_padding=output_padding, bias=not bn)
         self.bn = nn.BatchNorm2d(c2) if bn else nn.Identity()
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
 
@@ -182,7 +182,7 @@ class ConvTranspose3d(nn.Module):
 
     default_act = nn.ReLU()  # default activation
 
-    def __init__(self, c1, c2, k=3, s=1, padding=0, padding_mode='reflect', bn=True, act=True):
+    def __init__(self, c1, c2, k=3, s=1, padding=0, padding_mode='reflect', output_padding=1, bn=True, act=True):
         """
         Initialize ConvTranspose layer with given parameters.
 
@@ -197,7 +197,7 @@ class ConvTranspose3d(nn.Module):
             act (bool | nn.Module): Activation function.
         """
         super().__init__()
-        self.conv_transpose = nn.ConvTranspose3d(c1, c2, k, s, padding=padding, padding_mode=padding_mode, bias=not bn)
+        self.conv_transpose = nn.ConvTranspose3d(c1, c2, k, s, padding=padding, padding_mode=padding_mode, output_padding=output_padding, bias=not bn)
         self.bn = nn.BatchNorm3d(c2) if bn else nn.Identity()
         self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
 

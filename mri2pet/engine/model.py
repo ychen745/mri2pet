@@ -1,58 +1,50 @@
 import os
+from xml.sax.saxutils import escape
+
 import torch
 import yaml
+import importlib
 from collections import OrderedDict
 from mri2pet.models.utils import init_weights, get_scheduler
-
+from mri2pet.utils import utils
 
 class Model(torch.nn.Module):
     """
-    A base class for implementing generative models, unifying APIs across different model types.
-
-    This class provides a common interface for various operations related to generative models, including training,
-    validation and prediction. It handles different types of models.
+    A base class for implementing generative models.
 
     Attributes:
         model (torch.nn.Module): The underlying PyTorch model.
         trainer (BaseTrainer): The trainer object used for training the model.
         predictor (BasePredictor): The predictor object used for making predictions.
-        ckpt (dict): The checkpoint data if the model is loaded from a *.pt file.
         cfg (str): The configuration of the model if loaded from a *.yaml file.
         ckpt_path (str): The path to the checkpoint file.
-        metrics (dict): The latest training/validation metrics.
-        model_name (str): The name of the model.
 
     Methods:
         __call__: Alias for the predict method, enabling the model instance to be callable.
-        _new: Initialize a new model based on a configuration file.
-        _load: Load a model from a checkpoint file.
-        reset_weights: Reset the model's weights to their initial state.
-        load: Load model weights from a specified file.
-        save: Save the current state of the model to a file.
-        info: Log or return information about the model.
+        create_model: Initialize a new model based on a configuration file.
+        load_weights: Load model weights from a checkpoint file.
+        save_weights: Save the current state of the model to a file.
         predict: Perform predictions.
         train: Train the model on a dataset.
         val: Validate the model on a dataset.
-        tune: Perform hyperparameter tuning.
-        _apply: Apply a function to the model's tensors.
     """
-    def __init__(self, model='CycleGAN'):
+    def __init__(self, cfg='CycleGAN.yaml', weights=None):
         super().__init__()
 
         self.model = None
         self.trainer = None
         self.predictor = None
-        self.ckpt = {}
-        self.cfg = None
         self.ckpt_path = None
-        self.metrics = None
-        self.model_name = None
-        model = str(model).strip()
+        self.cfg = cfg
 
-        if str(model).endswith((".yaml", ".yml")):
-            self._new(model)
-        else:
-            self._load(model)
+        with open(cfg) as f:
+            cfg_dict = yaml.load(f, Loader=yaml.FullLoader)
+        self.cfg_dict = cfg_dict
+
+        self.create_model(cfg)
+        if weights is not None:
+            self.ckpt_path = weights
+            self.load_weights(weights)
 
     def forward(self):
         pass
@@ -63,88 +55,108 @@ class Model(torch.nn.Module):
         """
         return self.predict(**kwargs)
 
-    def _new(self, cfg: str):
+    def create_model(self):
         """
         Initialize a new model from model definitions.
-
-        Creates a new model instance based on the provided configuration file. Loads the model configuration
-        and initializes the model using the appropriate class.
-
-        Args:
-            cfg (str): Path to the model configuration file in YAML format.
-
-        Raises:
-            ValueError: If the configuration file is invalid.
-
-        Examples:
-            >>> model = Model()
-            >>> model._new("cyclegan.yaml")
         """
-        with open(cfg) as f:
-            cfg_dict = yaml.load(f, Loader=yaml.FullLoader)
-        self.cfg = cfg
+        self.modules = self.cfg_dict.get("model_names")
+        self.model = {}
+        for module in self.modules:
+            self.model[module.name] = self.create_module(module.module_name)
 
+    @staticmethod
+    def create_module(self, module_name: str):
+        return getattr(importlib.import_module(f"mri2pet.nets.{module_name}"), module_name)
 
-    def _load(self, weights: str, task=None) -> None:
+    def load_weights(self, weights: str):
         """
-        Load a model from a checkpoint file or initialize it from a weights file.
-
-        This method handles loading models from either .pt checkpoint files or other weight file formats. It sets
-        up the model, task, and related attributes based on the loaded weights.
-
-        Args:
-            weights (str): Path to the model weights file to be loaded.
-
-        Raises:
-            FileNotFoundError: If the specified weights file does not exist or is inaccessible.
-            ValueError: If the weights file format is unsupported or invalid.
-
-        Examples:
-            >>> model = Model()
-            >>> model._load("cyclegan.pt")
-            >>> model._load("path/to/weights.pth")
+        Load a model from a checkpoint file.
         """
-        if weights.lower().startswith(("https://", "http://", "rtsp://", "rtmp://", "tcp://")):
-            weights = checks.check_file(weights, download_dir=SETTINGS["weights_dir"])  # download and return local file
-        weights = checks.check_model_file_from_stem(weights)  # add suffix, i.e. yolo11n -> yolo11n.pt
+        try:
+            for name in self.model.keys():
+                state_dict = torch.load(weights, weights_only=True)
+                self.model[name].load_state_dict(state_dict)
+        except:
+            print(f'Failed to load model weights.')
 
-        if str(weights).rpartition(".")[-1] == "pt":
-            self.model, self.ckpt = attempt_load_one_weight(weights)
-            self.task = self.model.task
-            self.overrides = self.model.args = self._reset_ckpt_args(self.model.args)
-            self.ckpt_path = self.model.pt_path
-        else:
-            weights = checks.check_file(weights)  # runs in all cases, not redundant with above call
-            self.model, self.ckpt = weights, None
-            self.task = task or guess_model_task(weights)
-            self.ckpt_path = weights
-        self.overrides["model"] = weights
-        self.overrides["task"] = self.task
-        self.model_name = weights
+    def save_weights(self, weights: str):
+        """
+        Save a model to a checkpoint file.
+        """
+        try:
+            for name in self.model.keys():
+                torch.save(self.model[name].state_dict(), weights)
+        except:
+            print(f'Failed to save model weights.')
 
     # load and print networks; create schedulers
-    def setup(self, opt, parser=None):
+    def setup(self, opt):
         if self.isTrain:
-            self.schedulers = [networks3D.get_scheduler(optimizer, opt) for optimizer in self.optimizers]
-
+            self.schedulers = [utils.get_scheduler(optimizer, opt) for optimizer in self.optimizers]
         if not self.isTrain:
             self.load_networks(opt.which_epoch, best=opt.best)
         elif opt.continue_train:
             self.load_networks(opt.which_epoch)
-        self.print_networks(opt.verbose)
+        self.print_networks(verbose=True)
 
-    # make models eval mode during test time
-    def eval(self):
-        for name in self.model_names:
-            if isinstance(name, str):
-                net = getattr(self, 'net' + name)
-                net.eval()
 
-    def train(self):
-        for name in self.model_names:
-            if isinstance(name, str):
-                net = getattr(self, 'net' + name)
-                net.train()
+    def train(self, trainer=None, **kwargs):
+        """
+        Train the model using the specified dataset and training configuration.
+
+        This method facilitates model training with a range of customizable settings. It supports training with a
+        custom trainer or the default training approach.
+
+        Args:
+            trainer (BaseTrainer, optional): Custom trainer instance for model training. If None, uses default.
+            **kwargs (Any): Arbitrary keyword arguments for training configuration. Common options include:
+                data (str): Path to dataset configuration file.
+                epochs (int): Number of training epochs.
+                batch (int): Batch size for training.
+                imgsz (int): Input image size.
+                device (str): Device to run training on (e.g., 'cuda', 'cpu').
+                workers (int): Number of worker threads for data loading.
+                optimizer (str): Optimizer to use for training.
+                lr0 (float): Initial learning rate.
+                patience (int): Epochs to wait for no observable improvement for early stopping of training.
+
+        Returns:
+            (Dict | None): Training metrics if available and training is successful; otherwise, None.
+
+        Examples:
+            >>> model = CycleGAN("cyclegan.pt")
+            >>> results = model.train(data="cyclegan.yaml", epochs=3)
+        """
+        if kwargs.get("cfg"):
+            with open(kwargs["cfg"]) as f:
+                overrides = yaml.safe_load(kwargs.get("cfg"))
+        else:
+            overrides = self.overrides
+
+        custom = {
+            # NOTE: handle the case when 'cfg' includes 'data'.
+            "data": overrides.get("data") or DEFAULT_CFG_DICT["data"] or TASK2DATA[self.task],
+            "model": self.overrides["model"],
+            "task": self.task,
+        }  # method defaults
+        args = {**overrides, **custom, **kwargs, "mode": "train"}  # highest priority args on the right
+        if args.get("resume"):
+            args["resume"] = self.ckpt_path
+
+        self.trainer = (trainer or self._smart_load("trainer"))(overrides=args, _callbacks=self.callbacks)
+        if not args.get("resume"):  # manually set model only if not resuming
+            self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
+            self.model = self.trainer.model
+
+        self.trainer.hub_session = self.session  # attach optional HUB session
+        self.trainer.train()
+        # Update model and cfg after training
+        if RANK in {-1, 0}:
+            ckpt = self.trainer.best if self.trainer.best.exists() else self.trainer.last
+            self.model, self.ckpt = attempt_load_one_weight(ckpt)
+            self.overrides = self.model.args
+            self.metrics = getattr(self.trainer.validator, "metrics", None)  # TODO: no metrics returned by DDP
+        return self.metrics
 
     # used in test time, wrapping `forward` in no_grad() so we don't save
     # intermediate steps for backprop
@@ -213,34 +225,17 @@ class Model(torch.nn.Module):
     # load models from the disk
     def load_networks(self, which_epoch, best=False):
         for name in self.model_names:
-            if isinstance(name, str):
-                if best:
-                    load_filename = 'best_net_%s.pth' % (name)
-                else:
-                    load_filename = '%s_net_%s.pth' % (which_epoch, name)
-                load_path = os.path.join(self.save_dir, load_filename)
-                net = getattr(self, 'net' + name)
-                if isinstance(net, torch.nn.DataParallel):
-                    net = net.module
-                print('loading the model from %s' % load_path)
-                # if you are using PyTorch newer than 0.4 (e.g., built from
-                # GitHub source), you can remove str() on self.device
-                state_dict = torch.load(load_path, map_location=str(self.device))
-
-                if hasattr(state_dict, '_metadata'):
-                    del state_dict._metadata
-
-                # patch InstanceNorm checkpoints prior to 0.4
-                for key in list(state_dict.keys()):  # need to copy keys here because we mutate in loop
-                    self.__patch_instance_norm_state_dict(state_dict, net, key.split('.'))
-                net.load_state_dict(state_dict)
+            if best:
+                load_filename = 'best_net_%s.pth' % (name)
+            else:
+                load_filename = '%s_net_%s.pth' % (which_epoch, name)
 
     # print network information
-    def print_networks(self, verbose):
+    def print_networks(self, verbose=False):
         print('---------- Networks initialized -------------')
         for name in self.model_names:
             if isinstance(name, str):
-                net = getattr(self, 'net' + name)
+                net = getattr(self, name)
                 num_params = 0
                 for param in net.parameters():
                     num_params += param.numel()

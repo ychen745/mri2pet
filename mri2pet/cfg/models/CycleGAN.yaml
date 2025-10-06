@@ -1,0 +1,20 @@
+### Model ###
+model_name: CycleGAN
+module_names:
+  - name: G1
+    module_name: ResnetGenerator
+  - name: D1
+    module_name: NLayerDiscriminator
+  - name: G2
+    module_name: ResnetGenerator
+  - name: D2
+    module_name: NLayerDiscriminator
+
+ngf: 64
+ndf: 64
+padding_mode: 'reflect'
+
+### Training ###
+lambda_A: 10.0
+lambda_B: 10.0
+lambda_identity: 0.5

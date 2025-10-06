@@ -1,18 +1,17 @@
 import torch
 import torch.nn as nn
 import functools
-from einops import rearrange
-from transformers import AutoTokenizer, AutoModel
-from .vol_blocks import DAFTBlock
+from .conv import Conv, Conv3d, ConvTranspose, ConvTranspose3d
+from .block import DAFTBlock, ResnetBlock, ResnetBlock3d
 
-# Defines the generator that consists of Resnet blocks between a few
-# downsampling/upsampling operations.
-# Code and idea originally from Justin Johnson's architecture.
-# https://github.com/jcjohnson/fast-neural-style/
+""" 
+    Defines the generator that consists of Resnet blocks between a few downsampling/upsampling operations.
+    Code and idea originally from Justin Johnson's architecture.
+    https://github.com/jcjohnson/fast-neural-style/
+"""
 class ResnetGenerator(nn.Module):
-    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm3d, use_dropout=False, n_blocks=6, padding_type='replicate'):
-        assert(n_blocks >= 0)
-        super(ResnetGenerator, self).__init__()
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm3d, use_dropout=False, n_blocks=6, padding_mode='reflect'):
+        super().__init__()
         self.input_nc = input_nc
         self.output_nc = output_nc
         self.ngf = ngf
@@ -22,45 +21,32 @@ class ResnetGenerator(nn.Module):
         else:
             use_bias = norm_layer == nn.InstanceNorm3d
 
-        if padding_type == 'reflect':
-            model = [nn.ReplicationPad3d(3),
-                    nn.Conv3d(input_nc, ngf, kernel_size=7, padding=0,
-                            bias=use_bias),
-                    norm_layer(ngf),
-                    nn.ReLU(True)]
-        elif padding_type == 'replicate':
-            model = [nn.ReplicationPad3d(3),
-                    nn.Conv3d(input_nc, ngf, kernel_size=7, padding=0,
-                            bias=use_bias),
-                    norm_layer(ngf),
-                    nn.ReLU(True)]
+        model = []
+        if padding_mode == 'reflect':
+            model += [nn.ReflectionPad3d(3)]
+        elif padding_mode == 'replicate':
+            model += [nn.ReplicationPad3d(3)]
         else:
             print('Invalid padding type')
             exit()
 
+        model += [Conv3d(input_nc, ngf, k=7, padding=0)]
+
         n_downsampling = 2
         for i in range(n_downsampling):
             mult = 2**i
-            model += [nn.Conv3d(ngf * mult, ngf * mult * 2, kernel_size=3,
-                                stride=2, padding=1, bias=use_bias),
-                      norm_layer(ngf * mult * 2),
-                      nn.ReLU(True)]
+            model += [Conv3d(ngf * mult, ngf * mult * 2, k=3, s=2, padding=1)]
 
         mult = 2**n_downsampling
         for i in range(n_blocks):
-            model += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+            model += [ResnetBlock3d(ngf * mult, ngf * mult, padding_mode=padding_mode)]
 
         for i in range(n_downsampling):
             mult = 2**(n_downsampling - i)
-            model += [nn.ConvTranspose3d(ngf * mult, int(ngf * mult / 2),
-                                         kernel_size=3, stride=2,
-                                         padding=1, output_padding=1,
-                                         bias=use_bias),
-                      norm_layer(int(ngf * mult / 2)),
-                      nn.ReLU(True)]
-        if padding_type == 'reflect':
+            model += [ConvTranspose3d(ngf * mult, int(ngf * mult / 2), k=3, s=2, padding=1, output_padding=1)]
+        if padding_mode == 'reflect':
             model += [nn.ReflectionPad3d(3)]
-        elif padding_type == 'replicate':
+        elif padding_mode == 'replicate':
             model += [nn.ReplicationPad3d(3)]
         else:
             print('Invalid padding type')
@@ -71,57 +57,57 @@ class ResnetGenerator(nn.Module):
 
         self.model = nn.Sequential(*model)
 
-    def forward(self, input):
-        return self.model(input)
-
-
-# Define a resnet block
-class ResnetBlock(nn.Module):
-    def __init__(self, dim, padding_type, norm_layer, use_dropout, use_bias):
-        super(ResnetBlock, self).__init__()
-        self.conv_block = self.build_conv_block(dim, padding_type, norm_layer, use_dropout, use_bias)
-        # self.cab = ChannelAttentionBlock()
-
-    def build_conv_block(self, dim, padding_type, norm_layer, use_dropout, use_bias):
-        conv_block = []
-        p = 0
-        if padding_type == 'reflect':
-            conv_block += [nn.ReflectionPad3d(1)]
-        elif padding_type == 'replicate':
-            conv_block += [nn.ReplicationPad3d(1)]
-        elif padding_type == 'zero':
-            p = 1
-        else:
-            raise NotImplementedError('padding [%s] is not implemented' % padding_type)
-
-        conv_block += [nn.Conv3d(dim, dim, kernel_size=3, padding=p, bias=use_bias),
-                       norm_layer(dim),
-                       nn.ReLU(True)]
-
-        # conv_block += [ChannelAttentionBlock()]
-
-        if use_dropout:
-            conv_block += [nn.Dropout(0.5)]
-
-        p = 0
-        if padding_type == 'reflect':
-            conv_block += [nn.ReflectionPad3d(1)]
-        elif padding_type == 'replicate':
-            conv_block += [nn.ReplicationPad3d(1)]
-        elif padding_type == 'zero':
-            p = 1
-        else:
-            raise NotImplementedError('padding [%s] is not implemented' % padding_type)
-        conv_block += [nn.Conv3d(dim, dim, kernel_size=3, padding=p, bias=use_bias),
-                       norm_layer(dim)]
-        
-        # conv_block += [ChannelAttentionBlock()]
-
-        return nn.Sequential(*conv_block)
-
     def forward(self, x):
-        out = x + self.conv_block(x)
-        return out
+        return self.model(x)
+
+
+# # Define a resnet block
+# class ResnetBlock(nn.Module):
+#     def __init__(self, dim, padding_type, norm_layer, use_dropout, use_bias):
+#         super(ResnetBlock, self).__init__()
+#         self.conv_block = self.build_conv_block(dim, padding_type, norm_layer, use_dropout, use_bias)
+#         # self.cab = ChannelAttentionBlock()
+#
+#     def build_conv_block(self, dim, padding_type, norm_layer, use_dropout, use_bias):
+#         conv_block = []
+#         p = 0
+#         if padding_type == 'reflect':
+#             conv_block += [nn.ReflectionPad3d(1)]
+#         elif padding_type == 'replicate':
+#             conv_block += [nn.ReplicationPad3d(1)]
+#         elif padding_type == 'zero':
+#             p = 1
+#         else:
+#             raise NotImplementedError('padding [%s] is not implemented' % padding_type)
+#
+#         conv_block += [nn.Conv3d(dim, dim, kernel_size=3, padding=p, bias=use_bias),
+#                        norm_layer(dim),
+#                        nn.ReLU(True)]
+#
+#         # conv_block += [ChannelAttentionBlock()]
+#
+#         if use_dropout:
+#             conv_block += [nn.Dropout(0.5)]
+#
+#         p = 0
+#         if padding_type == 'reflect':
+#             conv_block += [nn.ReflectionPad3d(1)]
+#         elif padding_type == 'replicate':
+#             conv_block += [nn.ReplicationPad3d(1)]
+#         elif padding_type == 'zero':
+#             p = 1
+#         else:
+#             raise NotImplementedError('padding [%s] is not implemented' % padding_type)
+#         conv_block += [nn.Conv3d(dim, dim, kernel_size=3, padding=p, bias=use_bias),
+#                        norm_layer(dim)]
+#
+#         # conv_block += [ChannelAttentionBlock()]
+#
+#         return nn.Sequential(*conv_block)
+#
+#     def forward(self, x):
+#         out = x + self.conv_block(x)
+#         return out
 
 
 # Defines the Unet generator.
