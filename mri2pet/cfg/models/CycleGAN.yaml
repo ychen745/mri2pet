@@ -1,5 +1,18 @@
+device: cuda
+seed: 42
+
+### Paths ###
+image_path: None
+label_path: None
+result_path: None
+checkpoint_path: None
+weight_path: None
+
 ### Model ###
 model_name: CycleGAN
+trainer: CycleGANTrainer
+validator: CycleGANValidator
+predictor: CycleGANPredictor
 module_names:
   - name: G1
     module_name: ResnetGenerator
@@ -12,9 +25,45 @@ module_names:
 
 ngf: 64
 ndf: 64
-padding_mode: 'reflect'
+padding_mode: reflect
 
 ### Training ###
+resume: false
+epochs: 200
+start_epoch: 0
+batch_size: 8
+patch_size: [64, 64, 64]
+optimizer: 'adam'
+scheduler: 'lr'
+num_workers: 4
+init_type: 'normal'
+lr: 0.0002
+earlystop: true
+save_pariod: 20
+niter_decay: 20
+
 lambda_A: 10.0
 lambda_B: 10.0
 lambda_identity: 0.5
+beta1: 0.5
+
+### loss ###
+loss_fn:
+  - name: criterionGAN
+    module_name: GANLoss
+    params:
+      use_lsgan: false
+  - name: criterionCycle
+    module_name: L1Loss
+  - name: criterionIdt
+    module_name: L1Loss
+
+loss_names:
+  - G1
+  - G2
+  - D1
+  - D2
+  - cycle_A
+  - cycle_B
+  - idt_A
+  - idt_B

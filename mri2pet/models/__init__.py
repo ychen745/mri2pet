@@ -23,23 +23,8 @@ class BaseModel(torch.nn.Module):
         loss: Compute loss for training.
     """
 
-    def forward(self, x, *args, **kwargs):
-        """
-        Perform forward pass of the model for either training or inference.
-
-        If x is a dict, calculates and returns the loss for training. Otherwise, returns predictions for inference.
-
-        Args:
-            x (torch.Tensor | dict): Input tensor for inference, or dict with image tensor and labels for training.
-            *args (Any): Variable length argument list.
-            **kwargs (Any): Arbitrary keyword arguments.
-
-        Returns:
-            (torch.Tensor): Loss if x is a dict (training), or network predictions (inference).
-        """
-        if isinstance(x, dict):  # for cases of training and validating while training.
-            return self.loss(x, *args, **kwargs)
-        return self.predict(x, *args, **kwargs)
+    def forward(self):
+        pass
 
     def predict(self, x, profile=False, visualize=False, embed=None):
         """
@@ -144,3 +129,12 @@ class BaseModel(torch.nn.Module):
     def init_criterion(self):
         """Initialize the loss criterion for the BaseModel."""
         raise NotImplementedError("compute_loss() needs to be implemented by task heads")
+
+    @staticmethod
+    def set_requires_grad(nets, requires_grad=False):
+        if not isinstance(nets, list):
+            nets = [nets]
+        for net in nets:
+            if net is not None:
+                for param in net.parameters():
+                    param.requires_grad = requires_grad

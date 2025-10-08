@@ -1,11 +1,8 @@
 import os
-from xml.sax.saxutils import escape
-
 import torch
 import yaml
 import importlib
 from collections import OrderedDict
-from mri2pet.models.utils import init_weights, get_scheduler
 from mri2pet.utils import utils
 
 class Model(torch.nn.Module):
@@ -41,7 +38,7 @@ class Model(torch.nn.Module):
             cfg_dict = yaml.load(f, Loader=yaml.FullLoader)
         self.cfg_dict = cfg_dict
 
-        self.create_model(cfg)
+        self.create_model()
         if weights is not None:
             self.ckpt_path = weights
             self.load_weights(weights)
@@ -55,17 +52,8 @@ class Model(torch.nn.Module):
         """
         return self.predict(**kwargs)
 
-    def create_model(self):
-        """
-        Initialize a new model from model definitions.
-        """
-        self.modules = self.cfg_dict.get("model_names")
-        self.model = {}
-        for module in self.modules:
-            self.model[module.name] = self.create_module(module.module_name)
-
     @staticmethod
-    def create_module(self, module_name: str):
+    def create_module(module_name: str):
         return getattr(importlib.import_module(f"mri2pet.nets.{module_name}"), module_name)
 
     def load_weights(self, weights: str):
@@ -89,7 +77,7 @@ class Model(torch.nn.Module):
         except:
             print(f'Failed to save model weights.')
 
-    # load and print networks; create schedulers
+    # create schedulers and load weights for training
     def setup(self, opt):
         if self.isTrain:
             self.schedulers = [utils.get_scheduler(optimizer, opt) for optimizer in self.optimizers]
@@ -133,30 +121,10 @@ class Model(torch.nn.Module):
         else:
             overrides = self.overrides
 
-        custom = {
-            # NOTE: handle the case when 'cfg' includes 'data'.
-            "data": overrides.get("data") or DEFAULT_CFG_DICT["data"] or TASK2DATA[self.task],
-            "model": self.overrides["model"],
-            "task": self.task,
-        }  # method defaults
-        args = {**overrides, **custom, **kwargs, "mode": "train"}  # highest priority args on the right
-        if args.get("resume"):
-            args["resume"] = self.ckpt_path
-
-        self.trainer = (trainer or self._smart_load("trainer"))(overrides=args, _callbacks=self.callbacks)
-        if not args.get("resume"):  # manually set model only if not resuming
-            self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
-            self.model = self.trainer.model
-
-        self.trainer.hub_session = self.session  # attach optional HUB session
+        self.trainer = trainer or self.setup_trainer()
+        self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
+        self.model = self.trainer.model
         self.trainer.train()
-        # Update model and cfg after training
-        if RANK in {-1, 0}:
-            ckpt = self.trainer.best if self.trainer.best.exists() else self.trainer.last
-            self.model, self.ckpt = attempt_load_one_weight(ckpt)
-            self.overrides = self.model.args
-            self.metrics = getattr(self.trainer.validator, "metrics", None)  # TODO: no metrics returned by DDP
-        return self.metrics
 
     # used in test time, wrapping `forward` in no_grad() so we don't save
     # intermediate steps for backprop
@@ -164,11 +132,7 @@ class Model(torch.nn.Module):
         with torch.no_grad():
             self.forward()
 
-    # get image paths
-    def get_image_paths(self):
-        return self.image_paths
-
-    def optimize_parameters(self):
+    def setup_trainer(self):
         pass
 
     # update learning rate (called once every epoch)

@@ -1,13 +1,12 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
-
 import math
 import random
 from copy import copy
 from typing import Any, Dict, List, Optional
-import numpy as np
 import torch.nn as nn
+from torch.utils.data import DataLoader
+from mri2pet.data.utils import get_nifti_dataset
 from mri2pet.engine.trainer import BaseTrainer
-from mri2pet.models import cyclegan
+from .model import CycleGANModel
 
 
 class CycleGANTrainer(BaseTrainer):
@@ -22,33 +21,34 @@ class CycleGANTrainer(BaseTrainer):
     Methods:
         get_model: Return a CycleGAN model.
         get_validator: Return a validator for model evaluation.
-
-    Examples:
-        >>> from mri2pet.models.cyclegan import CycleGANTrainer
-        >>> args = dict(model="cyclegan.pt", data="cyclegan.yaml", epochs=3)
-        >>> trainer = CycleGANTrainer()
-        >>> trainer.train()
     """
 
-    def get_model(self, cfg: Optional[str] = None, weights: Optional[str] = None, verbose: bool = True):
-        """
-        Return a CycleGAN model.
+    def __init__(self, cfg: str = "CycleGAN.yaml"):
+        super().__init__(cfg)
 
-        Args:
-            cfg (str, optional): Path to model configuration file.
-            weights (str, optional): Path to model weights.
+        self.model = self.get_model()
+        self.dataset = self.get_dataset()
+        self.train_loader, self.test_loader = self.get_dataloader(self.dataset)
+        self.loss = self.get_loss(cfg)
+        self.validator = self.get_validator(cfg)
 
-        Returns:
-            (CycleGANModel): CycleGAN model.
-        """
-        model = CycleGANModel(cfg, nc=self.data["nc"], ch=self.data["channels"], verbose=verbose and RANK == -1)
-        if weights:
-            model.load(weights)
+    def get_model(self):
+        model = CycleGANModel(self.cfg)
         return model
+
+    def get_dataset(self):
+        train_dataset = get_nifti_dataset(self.cfg, 'train')
+        test_dataset = get_nifti_dataset(self.cfg, 'test')
+        return {'train': train_dataset, 'test': test_dataset}
+
+    def get_dataloader(self, dataset):
+        train_loader = DataLoader(self.dataset['train'], num_workers=self.cfg['num_workers'], batch_size=self.cfg['batch_size'], shuffle=True)
+        test_loader = DataLoader(self.dataset['test'], num_workers=0, batch_size=1, shuffle=True)
+        return train_loader, test_loader
 
     def get_validator(self):
         """Return a DetectionValidator for YOLO model validation."""
-        self.loss_names = "box_loss", "cls_loss", "dfl_loss"
-        return yolo.detect.DetectionValidator(
-            self.test_loader, save_dir=self.save_dir, args=copy(self.args), _callbacks=self.callbacks
-        )
+        return None
+
+    def train(self):
+        pass
