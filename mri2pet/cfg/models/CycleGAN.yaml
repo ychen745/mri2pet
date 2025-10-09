@@ -1,5 +1,6 @@
 device: cuda
 seed: 42
+training: true
 
 ### Paths ###
 image_path: None
@@ -13,14 +14,14 @@ model_name: CycleGAN
 trainer: CycleGANTrainer
 validator: CycleGANValidator
 predictor: CycleGANPredictor
-module_names:
-  - name: G1
+networks:
+  - name: G_A
     module_name: ResnetGenerator
-  - name: D1
+  - name: D_A
     module_name: NLayerDiscriminator
-  - name: G2
+  - name: G_B
     module_name: ResnetGenerator
-  - name: D2
+  - name: D_B
     module_name: NLayerDiscriminator
 
 ngf: 64
@@ -58,12 +59,22 @@ loss_fn:
   - name: criterionIdt
     module_name: L1Loss
 
+# for printing loss during training
 loss_names:
-  - G1
-  - G2
-  - D1
-  - D2
+  - G_A
+  - G_B
+  - D_A
+  - D_B
   - cycle_A
   - cycle_B
   - idt_A
   - idt_B
+
+# for getting visuals during training and inference
+visual_names:
+  - real_A
+  - real_B
+  - fake_A
+  - fake_B
+  - rec_A
+  - rec_B

@@ -1,5 +1,6 @@
 import math
 import random
+import time
 from copy import copy
 from typing import Any, Dict, List, Optional
 import torch.nn as nn
@@ -47,7 +48,7 @@ class CycleGANTrainer(BaseTrainer):
         return train_loader, test_loader
 
     def get_validator(self):
-        """Return a DetectionValidator for YOLO model validation."""
+        """Return a DetectionValidator for CycleGAN model validation."""
         return None
 
     def train(self):

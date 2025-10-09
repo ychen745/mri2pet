@@ -70,13 +70,6 @@ class BaseTrainer:
         """
         raise NotImplementedError
 
-    def get_loss(self):
-        """
-        To be implemented by the subclass.
-        Get loss functions.
-        """
-        raise NotImplementedError
-
     def get_validator(self):
         """
         To be implemented by the subclass.
@@ -87,6 +80,7 @@ class BaseTrainer:
     def train(self):
         self.model.to(self.device)
         self.model.train()
+
 
 
 

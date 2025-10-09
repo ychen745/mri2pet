@@ -1,134 +1,148 @@
+import os
 import torch
 from mri2pet.utils.torch_utils import time_sync, intersect_dicts
 from .cyclegan import CycleGAN
+from collections import OrderedDict
+from mri2pet.cfg import get_cfg
 # from .pix2pix import Pix2pix
 # from .sharegan import ShareGAN
 
 # __all__ = "CycleGAN", "Pix2pix", "ShareGAN"
 __all__ = "CycleGAN"
 
-class BaseModel(torch.nn.Module):
+class BaseModel:
     """
     Base class for all generative models.
 
     This class provides common functionality for generative models including forward pass handling and weight loading capabilities.
 
     Attributes:
-        model (torch.nn.Module): The neural network model.
+        module_names (List[str]): module names. Used in network printing capabilities.
+        training (bool): whether in training mode or not.
+        visual_names (List[str]): list of visual names. e.g. real_A, fake_B, ... in GAN
+        loss_names (List[str]): list of loss names.
+        save_dir (str): directory to save model checkpoints.
+        device (torch.device): device to use.
 
     Methods:
         forward: Perform forward pass for training or inference.
-        predict: Perform inference on input tensor.
-        load: Load weights into the model.
-        loss: Compute loss for training.
+        set_input: set up inputs for the model.
+        train: set up training mode.
+        eval: set up evaluation mode.
+        test: perform forward pass for testing.
+        setup: load and print networks
+        get_current_visuals: get current visuals.
+        get_current_losses: get current losses.
+        save_networks: save networks.
+        load_networks: load networks.
+        print_networks: print networks.
+        set_requires_grad: set requires_grad.
+        optimize_parameters: optimize network parameters.
     """
+    def __init__(self, cfg):
+        cfg_dict = get_cfg(cfg)
+        self.module_names = [network['name'] for network in cfg_dict['networks']]
+        self.training = cfg_dict['training']
+        self.visual_names = cfg_dict['visual_names']
+        self.loss_names = cfg_dict['loss_names']
+        self.save_dir = cfg_dict['checkpoint_path']
+        self.device = torch.device(cfg_dict['device']) if 'device' in cfg_dict else 'cpu'
 
     def forward(self):
-        pass
+        raise NotImplementedError
 
-    def predict(self, x, profile=False, visualize=False, embed=None):
-        """
-        Perform a forward pass through the network.
+    def set_input(self, input):
+        self.input = input
 
-        Args:
-            x (torch.Tensor): The input tensor to the model.
-            profile (bool): Print the computation time of each layer if True.
-            visualize (bool): Save the feature maps of the model if True.
-            augment (bool): Augment image during prediction.
-            embed (list, optional): A list of feature vectors/embeddings to return.
+    # make models eval mode during test time
+    def train(self):
+        for name in self.module_names:
+            if isinstance(name, str):
+                net = getattr(self, name)
+                net.train()
 
-        Returns:
-            (torch.Tensor): The last output of the model.
-        """
-        return self._predict_once(x, profile, visualize, embed)
+    def eval(self):
+        for name in self.module_names:
+            if isinstance(name, str):
+                net = getattr(self, name)
+                net.eval()
 
-    def _predict_once(self, x, profile=False):
-        """
-        Perform a forward pass through the network.
+    def test(self):
+        with torch.no_grad():
+            self.forward()
 
-        Args:
-            x (torch.Tensor): The input tensor to the model.
-            profile (bool): Print the computation time of each layer if True.
+    # load and print networks; create schedulers
+    def setup(self, cfg):
+        # if self.training:
+        #     self.schedulers = [networks3D.get_scheduler(optimizer, opt) for optimizer in self.optimizers]
 
-        Returns:
-            (torch.Tensor): The last output of the model.
-        """
-        y, dt = [], [] # outputs
-        for m in self.model:
-            if m.f != -1:  # if not from previous layer
-                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
-            if profile:
-                self._profile_one_layer(m, x, dt)
-            x = m(x)  # run
-            y.append(x if m.i in self.save else None)  # save output
-        return x
+        if not self.training:
+            self.load_networks(cfg['which_epoch'], best=cfg['best'])
+        elif cfg.continue_train:
+            self.load_networks(cfg['which_epoch'], best=False)
+        self.print_networks(cfg['verbose'])
 
-    def _profile_one_layer(self, m, x, dt):
-        """
-        Profile the computation time and FLOPs of a single layer of the model on a given input.
+    # return visualization images.
+    def get_current_visuals(self):
+        visual_ret = OrderedDict()
+        for name in self.visual_names:
+            if isinstance(name, str):
+                visual_ret[name] = getattr(self, name)
+        return visual_ret
 
-        Args:
-            m (torch.nn.Module): The layer to be profiled.
-            x (torch.Tensor): The input data to the layer.
-            dt (list): A list to store the computation time of the layer.
-        """
-        try:
-            import thop
-        except ImportError:
-            thop = None  # conda support without 'ultralytics-thop' installed
+    # return traning losses/errors.
+    def get_current_losses(self):
+        errors_ret = OrderedDict()
+        for name in self.loss_names:
+            if isinstance(name, str):
+                # float(...) works for both scalar tensor and float number
+                errors_ret[name] = float(getattr(self, 'loss_' + name))
+        return errors_ret
 
-        c = m == self.model[-1] and isinstance(x, list)  # is final layer list, copy input as inplace fix
-        flops = thop.profile(m, inputs=[x.copy() if c else x], verbose=False)[0] / 1e9 * 2 if thop else 0  # GFLOPs
-        t = time_sync()
-        for _ in range(10):
-            m(x.copy() if c else x)
-        dt.append((time_sync() - t) * 100)
-        if m == self.model[0]:
-            print(f"{'time (ms)':>10s} {'GFLOPs':>10s} {'params':>10s}  module")
-        print(f"{dt[-1]:10.2f} {flops:10.2f} {m.np:10.0f}  {m.type}")
-        if c:
-            print(f"{sum(dt):10.2f} {'-':>10s} {'-':>10s}  Total")
+    # save models to the disk
+    def save_networks(self, which_epoch, best=False):
+        for name in self.module_names:
+            if isinstance(name, str):
+                save_filename = f'best_net_{name}.pth' if best else f'{which_epoch}_net_{name}.pth'
+                save_path = os.path.join(self.save_dir, save_filename)
+                net = getattr(self, name)
 
-    def load(self, weights, verbose=True):
-        """
-        Load weights into the model.
+                if len(self.gpu_ids) > 0 and torch.cuda.is_available():
+                    torch.save(net.module.cpu().state_dict(), save_path)
+                    net.cuda(self.gpu_ids[0])
+                else:
+                    torch.save(net.cpu().state_dict(), save_path)
 
-        Args:
-            weights (dict | torch.nn.Module): The pre-trained weights to be loaded.
-        """
-        model = weights["model"] if isinstance(weights, dict) else weights  # torchvision models are not dicts
-        csd = model.float().state_dict()  # checkpoint state_dict as FP32
-        updated_csd = intersect_dicts(csd, self.state_dict())  # intersect
-        self.load_state_dict(updated_csd, strict=False)  # load
-        len_updated_csd = len(updated_csd)
-        first_conv = "model.0.conv.weight"  # hard-coded to yolo models for now
-        # mostly used to boost multi-channel training
-        state_dict = self.state_dict()
-        if first_conv not in updated_csd and first_conv in state_dict:
-            c1, c2, h, w = state_dict[first_conv].shape
-            cc1, cc2, ch, cw = csd[first_conv].shape
-            if ch == h and cw == w:
-                c1, c2 = min(c1, cc1), min(c2, cc2)
-                state_dict[first_conv][:c1, :c2] = csd[first_conv][:c1, :c2]
-                len_updated_csd += 1
+    # load models from the disk
+    def load_networks(self, which_epoch, best=False):
+        for name in self.module_names:
+            if isinstance(name, str):
+                if best:
+                    load_filename = f'best_net_{name}.pth'
+                else:
+                    load_filename = f'{which_epoch}_net_{name}.pth'
+                load_path = os.path.join(self.save_dir, load_filename)
+                net = getattr(self, name)
+                if isinstance(net, torch.nn.DataParallel):
+                    net = net.module
+                print('loading the model from %s' % load_path)
+                state_dict = torch.load(load_path, map_location=str(self.device))
 
-    def loss(self, batch, preds=None):
-        """
-        Compute loss.
+                net.load_state_dict(state_dict)
 
-        Args:
-            batch (dict): Batch to compute loss on.
-            preds (torch.Tensor | List[torch.Tensor], optional): Predictions.
-        """
-        if getattr(self, "criterion", None) is None:
-            self.criterion = self.init_criterion()
-
-        preds = self.forward(batch["img"]) if preds is None else preds
-        return self.criterion(preds, batch)
-
-    def init_criterion(self):
-        """Initialize the loss criterion for the BaseModel."""
-        raise NotImplementedError("compute_loss() needs to be implemented by task heads")
+    # print network information
+    def print_networks(self, verbose=False):
+        print('---------- Networks initialized -------------')
+        for name in self.model_names:
+            if isinstance(name, str):
+                net = getattr(self, name)
+                num_params = 0
+                for param in net.parameters():
+                    num_params += param.numel()
+                if verbose:
+                    print(net)
+                print('[Network %s] Total number of parameters : %.3f M' % (name, num_params / 1e6))
+        print('-----------------------------------------------')
 
     @staticmethod
     def set_requires_grad(nets, requires_grad=False):
@@ -138,3 +152,6 @@ class BaseModel(torch.nn.Module):
             if net is not None:
                 for param in net.parameters():
                     param.requires_grad = requires_grad
+
+    def optimize_parameters(self):
+        raise NotImplementedError

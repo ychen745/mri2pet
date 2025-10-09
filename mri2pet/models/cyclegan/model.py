@@ -48,8 +48,8 @@ class CycleGANModel(BaseModel):
         self.criterionIdt = torch.nn.L1Loss()
 
         # Optimizers
-        self.optimizer_G = torch.optim.Adam(self.G1.parameters(), lr=self.cfg["lr"], betas=(self.cfg["beta1"], 0.999))
-        self.optimizer_D = torch.optim.Adam(self.D1.parameters(), lr=self.cfg["lr"], betas=(self.cfg["beta1"], 0.999))
+        self.optimizer_G = torch.optim.Adam(self.G_A.parameters(), lr=self.cfg["lr"], betas=(self.cfg["beta1"], 0.999))
+        self.optimizer_D = torch.optim.Adam(self.D_A.parameters(), lr=self.cfg["lr"], betas=(self.cfg["beta1"], 0.999))
 
     @staticmethod
     def get_cfg(cfg):
@@ -71,10 +71,10 @@ class CycleGANModel(BaseModel):
         return getattr(importlib.import_module("mri2pet.nets"), module_name)
 
     def forward(self):
-        self.fake_B = self.G1(self.real_A)
-        self.rec_A = self.G2(self.fake_B)
-        self.fake_A = self.G2(self.real_B)
-        self.rec_B = self.G1(self.fake_A)
+        self.fake_B = self.G_A(self.real_A)
+        self.rec_A = self.G_B(self.fake_B)
+        self.fake_A = self.G_B(self.real_B)
+        self.rec_B = self.G_A(self.fake_A)
 
     def loss(self, batch, preds=None):
         """
@@ -95,22 +95,22 @@ class CycleGANModel(BaseModel):
 
         # Identity loss
         if lambda_idt > 0:
-            self.idt_A = self.netG1(self.real_B)
+            self.idt_A = self.netG_A(self.real_B)
             self.loss_idt_A = self.criterionIdt(self.idt_A, self.real_B) * lambda_B * lambda_idt
-            self.idt_B = self.netG2(self.real_A)
+            self.idt_B = self.netG_B(self.real_A)
             self.loss_idt_B = self.criterionIdt(self.idt_B, self.real_A) * lambda_A * lambda_idt
         else:
             self.loss_idt_A = 0
             self.loss_idt_B = 0
 
         # GAN loss
-        self.loss_G1 = self.criterionGAN(self.netD1(self.fake_B), True)
-        self.loss_G2 = self.criterionGAN(self.netD2(self.fake_A), True)
+        self.loss_G_A = self.criterionGAN(self.netD_A(self.fake_B), True)
+        self.loss_G_B = self.criterionGAN(self.netD_B(self.fake_A), True)
         # Cycle loss
         self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
         # combined loss
-        self.loss_G = self.loss_G1 + self.loss_G2 + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
+        self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
         self.loss_G.backward()
 
     def backward_D(self, netD, real, fake):
@@ -126,28 +126,28 @@ class CycleGANModel(BaseModel):
         loss_D.backward()
         return loss_D
 
-    def backward_D1(self):
+    def backward_D_A(self):
         # fake_B = self.fake_B_pool.query(self.fake_B)
-        # self.loss_D1 = self.backward_D(self.netD_A, self.real_B, fake_B)
-        self.loss_D1 = self.backward_D(self.netD1, self.real_B, self.fake_B)
+        # self.loss_D_A = self.backward_D(self.netD_A, self.real_B, fake_B)
+        self.loss_D_A = self.backward_D(self.netD_A, self.real_B, self.fake_B)
 
-    def backward_D2(self):
+    def backward_D_B(self):
         # fake_A = self.fake_A_pool.query(self.fake_A)
-        # self.loss_D2 = self.backward_D(self.netD_B, self.real_A, fake_A)
-        self.loss_D2 = self.backward_D(self.netD2, self.real_A, self.fake_A)
+        # self.loss_D_B = self.backward_D(self.netD_B, self.real_A, fake_A)
+        self.loss_D_B = self.backward_D(self.netD_B, self.real_A, self.fake_A)
 
     def optimize_parameters(self):
         # forward
         self.forward()
         # G_A and G_B
-        self.set_requires_grad([self.netD1, self.netD2], False)
+        self.set_requires_grad([self.netD_A, self.netD_B], False)
         self.optimizer_G.zero_grad()
         self.backward_G()
         self.optimizer_G.step()
         # D_A and D_B
-        self.set_requires_grad([self.netD1, self.netD2], True)
+        self.set_requires_grad([self.netD_A, self.netD_B], True)
         self.optimizer_D.zero_grad()
-        self.backward_D1()
-        self.backward_D2()
+        self.backward_D_A()
+        self.backward_D_B()
         self.optimizer_D.step()
 
